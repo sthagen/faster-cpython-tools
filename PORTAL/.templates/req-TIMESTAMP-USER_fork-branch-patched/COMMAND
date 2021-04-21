@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+REQ_ROOT=~/.requests/req-TIMESTAMP-USER_fork-branch-patched
+export PYTHONPATH=~/repositories/pyperformance
+
+python3.9 -m pyperformance compile \
+    --venv $REQ_ROOT/.run/venv \
+    --patch $REQ_ROOT/patch.diff \
+    $REQ_ROOT/compile.ini \
+    my-branch \
+    > $REQ_ROOT/run.log

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+REQ_ROOT=~/.requests/req-TIMESTAMP-USER_faster-cpython-master
+export PYTHONPATH=~/repositories/pyperformance
+
+python3.9 -m pyperformance compile \
+    --venv $REQ_ROOT/.run/venv \
+    $REQ_ROOT/compile.ini \
+    af7312e718 \
+    master \
+    > $REQ_ROOT/run.log

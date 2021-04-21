@@ -1,0 +1,10 @@
+{
+    "kind": "bench-compile",
+    "remote": "gh:faster-cpython",
+    "branch": "master",
+    "revision": "af7312e718",
+    "optimize": false,
+    "patch": false,
+    "benchmarks": "",
+    "debug": false
+}

@@ -1,0 +1,10 @@
+{
+    "kind": "bench-compile",
+    "remote": "gh:ericsnowcurrently",
+    "branch": "my-branch",
+    "revision": "",
+    "optimize": false,
+    "patch": true,
+    "benchmarks": "",
+    "debug": false
+}

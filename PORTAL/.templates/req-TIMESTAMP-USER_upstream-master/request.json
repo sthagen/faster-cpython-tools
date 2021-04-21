@@ -1,0 +1,10 @@
+{
+    "kind": "bench-compile",
+    "remote": "origin",
+    "branch": "master",
+    "revision": "master",
+    "optimize": false,
+    "patch": false,
+    "benchmarks": "",
+    "debug": false
+}
