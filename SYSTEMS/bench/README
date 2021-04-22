@@ -1,0 +1,33 @@
+
+The SSH tunnel that facilitates connections from the portal host
+to the bench host is started using ~benchmarking/.bench/connect.sh.
+
+For now all requests (from the portal host) are executed by the portal host
+via SSH.
+
+
+Directory structure:
+
+~benchmarking/
+   |- .local/
+   |   |- bin/...           - locally installed scripts (available on $PATH)
+   |
+   |- .ssh/
+   |   |- authorized_keys   - the public keys for connecting *from* the portal host
+   |   |- id_rsa            - used for the SSH tunnel *to* the portal host
+   |   |- id_rsa.pub        - stored in ~benchmarking/authorized_keys on the portal host
+   |
+   |- BENCH/
+   |   |- repositories/     - the git repos we rely on
+   |   |   |- cpython/
+   |   |   |- pyperformance/
+   |   |
+   |   |- REQUESTS/         - where data for requests from "portal" is stored
+   |   |   |- req-*/...
+   |   |
+   |   |- bench.json        - (private) the config for the request machinery on the bench host
+   |   |- connect.sh        - used to start the tmux session ("^B d" to detach)
+   |   |- tunnel.tmux       - used by connect.sh
+   |   |- tunnel.sh         - start the SSH tunnel directly (manually and unmanaged)
+   |   |- tunnel.pid        - the currently running SSH tunnel
+   |   |- .bashrc-common.sh - a script sourced in other users' .bashrc files

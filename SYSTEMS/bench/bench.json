@@ -1,0 +1,7 @@
+{
+    "portal_user": "...",
+    "portal_host": "...",
+    "portal_port": ...,
+    "tunnel_host": ...,
+    "tunnel_port": ...
+}
