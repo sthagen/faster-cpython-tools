@@ -8,6 +8,7 @@ fi
 LOCAL_BENCH_DIR="$(dirname $scriptfile)"
 homedir="$(dirname $LOCAL_BENCH_DIR)"
 if [ "$(dirname $homedir)" != "/home" ]; then
+    # XXX Try relative to the repo instead?
     >&2 echo "something went terribly wrong with $scriptfile"
     return 1
 fi
@@ -21,6 +22,23 @@ if [ -n "$USER" -a "$USER" = "$LOCAL_BENCH_USER" ]; then
 fi
 homedir=
 scriptfile=
+
+local_config=
+portal_config="$LOCAL_BENCH_DIR/portal.json"
+bench_config="$LOCAL_BENCH_DIR/bench.json"
+if [ -e "$portal_config" ]; then
+    local_config=$portal_config
+    BENCH_USER="$(sudo jq -r '.send_user' $portal_config)"
+    BENCH_HOST="$(sudo jq -r '.send_host' $portal_config)"
+    BENCH_PORT="$(sudo jq -r '.send_port' $portal_config)"
+    BENCH_CONN="$BENCH_USER@$BENCH_HOST"
+elif [ -e "$bench_config" ]; then
+    local_config=$bench_config
+    PORTAL_USER="$(sudo jq -r '.portal_user' $bench_config)"
+    PORTAL_HOST="$(sudo jq -r '.portal_host' $bench_config)"
+    PORTAL_PORT="$(sudo jq -r '.portal_port' $bench_config)"
+    PORTAL_CONN="$PORTAL_USER@$PORTAL_HOST"
+fi
 
 GIT_AUTHOR_NAME="$(git config --global --get 'user.name')"
 GIT_AUTHOR_EMAIL="$(git config --global --get 'user.email')"
@@ -52,6 +70,7 @@ echo '==================================='
 echo '=== setting up for benchmarking ==='
 echo '==================================='
 
+# Set up common aliases.
 echo
 set -x
 alias bench='sudo --login --user $LOCAL_BENCH_USER \
@@ -68,19 +87,15 @@ alias bench='sudo --login --user $LOCAL_BENCH_USER \
 #  fi
 alias bench-cwd='bench PWD_INIT="$(pwd)"'
 alias bench-git='bench-cwd git'
-
-{
-portal_config="$LOCAL_BENCH_DIR/portal.json"
-BENCH_USER="$(bench jq -r '.send_user' $portal_config)"
-BENCH_HOST="$(bench jq -r '.send_host' $portal_config)"
-BENCH_PORT="$(bench jq -r '.send_port' $portal_config)"
-portal_config=
-BENCH_CONN="$BENCH_USER@$BENCH_HOST"
-} 2>/dev/null
-
-alias bench-ssh="bench ssh -p $BENCH_PORT $BENCH_CONN"
-alias bench-scp="bench scp -P $BENCH_PORT"
 { set +x; } 2>/dev/null
+
+# Set up host-specific aliases.
+if [ "$local_config" = "$portal_config" ]; then
+    set -x
+    alias bench-ssh="bench ssh -p $BENCH_PORT $BENCH_CONN"
+    alias bench-scp="bench scp -P $BENCH_PORT"
+    { set +x; } 2>/dev/null
+fi
 
 echo
 bench-fix-ssh-agent
@@ -90,12 +105,27 @@ echo "env vars:"
 echo
 echo "LOCAL_BENCH_USER: $LOCAL_BENCH_USER"
 echo "LOCAL_BENCH_DIR:  $LOCAL_BENCH_DIR"
+if [ "$local_config" = "$portal_config" ]; then
+
 echo "BENCH_USER:       $BENCH_USER"
 echo "BENCH_HOST:       $BENCH_HOST"
 echo "BENCH_PORT:       $BENCH_PORT"
 echo "BENCH_CONN:       $BENCH_CONN"
+
+elif [ "$local_config" = "$bench_config" ]; then
+
+echo "PORTAL_USER:      $PORTAL_USER"
+echo "PORTAL_HOST:      $PORTAL_HOST"
+echo "PORTAL_PORT:      $PORTAL_PORT"
+echo "PORTAL_CONN:      $PORTAL_CONN"
+
+fi
 echo
 echo '==================================='
 echo '===   done (for benchmarking)   ==='
 echo '==================================='
 echo
+
+local_config=
+portal_config=
+bench_config=
