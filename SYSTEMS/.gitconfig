@@ -1,0 +1,18 @@
+[core]
+    editor = vim
+    excludesfile = ~/.gitignore
+
+[color]
+    ui = auto
+
+[alias]
+    st = status -s
+    lo = log --graph --decorate
+    br = rev-parse --abbrev-ref HEAD
+    up = checkout
+    tip = log -n 1 --graph --decorate HEAD
+
+[user]
+    # "name" and "email" are set via env vars (e.g. $GIT_AUTHOR_EMAIL).
+    name =
+    email =

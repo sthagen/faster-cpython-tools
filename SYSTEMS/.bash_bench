@@ -1,0 +1,62 @@
+
+###############
+# history
+
+if ! (readonly -p | grep -q HISTFILE); then
+    export HISTFILE=$HOME/.bash_history
+    # for setting history length see HISTFILESIZE in bash(1)
+    export HISTFILESIZE=2000
+    # append to the history file, don't overwrite it
+    shopt -s histappend
+fi
+
+if ! (readonly -p | grep -q HISTCONTROL); then
+    # don't put duplicate lines in the history. See bash(1) for more options
+    # ... or force ignoredups and ignorespace
+    export HISTCONTROL=ignoredups:ignorespace
+    # for setting history length see HISTSIZE in bash(1)
+    export HISTSIZE=1000
+fi
+
+bind -f $HOME/.inputrc
+
+
+###############
+# vim
+
+export EDITOR=vim
+alias vi="vim -O"
+
+
+###############
+# other
+
+shopt -s checkwinsize
+shopt -s globstar
+shopt -s dotglob
+export GLOBIGNORE=".:.."
+
+ulimit -c unlimited
+
+export BLOCKSIZE=K
+export PAGER=less
+
+export PATH=$HOME/.local/bin:$PATH
+
+alias ls="LC_COLLATE=C ls"
+
+# enable color support of ls and also add handy aliases
+if [ -x /usr/bin/dircolors ]; then
+    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
+
+    alias ls='LC_COLLATE=C ls --color=auto'
+    #alias dir='dir --color=auto'
+    #alias vdir='vdir --color=auto'
+
+    alias grep='grep --color=auto'
+    alias fgrep='fgrep --color=auto'
+    alias egrep='egrep --color=auto'
+fi
+
+alias ll='ls -lF'
+alias la='ls -lA'
