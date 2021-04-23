@@ -73,7 +73,7 @@ echo '==================================='
 # Set up common aliases.
 echo
 set -x
-alias bench='sudo --login --user $LOCAL_BENCH_USER \
+alias bench-home='sudo --login --user $LOCAL_BENCH_USER \
     SUDO_PWD="$(pwd)" \
     SSH_AUTH_SOCK="$SSH_AUTH_SOCK" \
     GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
@@ -85,9 +85,24 @@ alias bench='sudo --login --user $LOCAL_BENCH_USER \
 #  if [ -n "$PWD_INIT" ]; then
 #      cd $PWD_INIT
 #  fi
-alias bench-cwd='bench PWD_INIT="$(pwd)"'
+alias bench-cwd='bench-home PWD_INIT="$(pwd)"'
 alias bench-git='bench-cwd git'
 { set +x; } 2>/dev/null
+
+function bench() {
+    case "$(realpath $(pwd))" in
+        /home/$LOCAL_BENCH_USER|/home/$LOCAL_BENCH_USER/)
+            bench-home "$@"
+            ;;
+        /home/$LOCAL_BENCH_USER/*)
+            bench-cwd "$@"
+            ;;
+        *)
+            bench-home "$@"
+            ;;
+    esac
+}
+echo 'added bash function "bench" that combines bench-home and bench-cwd'
 
 # Set up host-specific aliases.
 if [ "$local_config" = "$portal_config" ]; then
