@@ -68,6 +68,9 @@ alias bench='sudo --login --user $LOCAL_BENCH_USER \
 #  fi
 alias bench-cwd='bench PWD_INIT="$(pwd)"'
 alias bench-git='bench-cwd git'
+alias bench-vi='bench-cwd vi -O -u $HOME/.vimrc'
+#alias bench-vi='bench-cwd vi -O -u $HOME/.vimrc -i $HOME/.viminfo'
+alias bench-view='bench-cwd view -O -u $HOME/.vimrc'
 
 {
 portal_config="$LOCAL_BENCH_DIR/portal.json"
@@ -78,7 +81,7 @@ portal_config=
 BENCH_CONN="$BENCH_USER@$BENCH_HOST"
 } 2>/dev/null
 
-alias bench-ssh="bench ssh -p $BENCH_PORT $BENCH_CONN"
+alias bench-ssh="bench ssh -A -p $BENCH_PORT $BENCH_CONN"
 alias bench-scp="bench scp -P $BENCH_PORT"
 { set +x; } 2>/dev/null
 
