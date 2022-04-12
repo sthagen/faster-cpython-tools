@@ -36,6 +36,13 @@ NSTORE_FAST = "__nstore_fast__"  # Number of STORE_FAST opcodes
 NSTORE_NONE_FAST = "__nstore_none_fast__"  # Number of STORE_FAST preceded by LOAD_CONST(None)
 CO_CONSTS_SIZE = "__co_consts_size__"
 CO_CONSTS_NUM = "__co_consts_num__"
+NUM_JUMP_ABS = "__num_jump_abs__"
+NUM_JUMP_REL = "__num_jump_rel__"
+NUM_JUMP_ABS_EXT = "__num_jump_abs_extended__"
+NUM_JUMP_REL_EXT = "__num_jump_rel_extended__"
+NUM_JUMP_ABS_BACKWARDS = "__num_jump_abs_backwards__"
+NUM_JUMP_ABS_BACKWARDS_EXT = "__num_jump_abs_extended_backwards__"
+NUM_SHORT_ABS_JUMPS = "__num_short_abs_jumps__"
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -52,6 +59,13 @@ SHOW_ITEMS = [
     (PREV_EXTENDED, "prev extended args"),
     (CO_CONSTS_SIZE, "total size of co_consts"),
     (CO_CONSTS_NUM, "number of co_consts"),
+    (NUM_JUMP_ABS, "number of absolute jumps"),
+    (NUM_JUMP_REL, "number of relative jumps"),
+    (NUM_JUMP_ABS_EXT, "number of absolute jumps with extended args"),
+    (NUM_JUMP_REL_EXT, "number of relative jumps with extended args"),
+    (NUM_JUMP_ABS_BACKWARDS, "number of absolute jumps backwards"),
+    (NUM_JUMP_ABS_BACKWARDS_EXT, "number of absolute jumps backwards with extended args"),
+    (NUM_SHORT_ABS_JUMPS, "number of absolute jumps with delta < 256"),
 ]
 
 # TODO: Make this list an option
@@ -253,6 +267,36 @@ class NamesReporter(Reporter):
                 key = f"!{name}"
                 counter[key] += 1
 
+class JumpsReporter(Reporter):
+
+    def reporting_guts(self, counter, co, bias):
+        co_code = co.co_code
+        extra = 0
+        for i in range(0, len(co_code), 2):
+            counter[NOPCODES] += 1
+            op = co_code[i]
+            oparg = extra*256 + co_code[i+1]
+            if op == opcode.EXTENDED_ARG:
+                extra = oparg
+                continue
+            extended = extra > 0
+            extra = 0
+            if op in opcode.hasjabs:
+                counter[NUM_JUMP_ABS] += 1
+                if extended:
+                    counter[NUM_JUMP_ABS_EXT] += 1
+                target = 2 * oparg
+                if target < i:
+                    counter[NUM_JUMP_ABS_BACKWARDS] += 1
+                    if extended:
+                        counter[NUM_JUMP_ABS_BACKWARDS_EXT] += 1
+                if abs(target-i)//2 < 256:
+                    counter[NUM_SHORT_ABS_JUMPS] += 1
+            if op in opcode.hasjrel:
+                counter[NUM_JUMP_REL] += 1
+                if extended:
+                    counter[NUM_JUMP_REL_EXT] += 1
+
 
 def expand_globs(filenames):
     for filename in filenames:
@@ -276,6 +320,8 @@ argparser.add_argument("--constants", type=int, metavar="N",
                        help="Show N most common constants")
 argparser.add_argument("--names", type=int, metavar="N",
                        help="Show N most common names")
+argparser.add_argument("--jumps", action="store_true",
+                      help="counts jumps with and without extended args")
 argparser.add_argument("--bias", type=int,
                        help="Add bias for opcodes inside for-loops")
 argparser.add_argument("--cache-needs", action="store_true",
@@ -312,6 +358,8 @@ def main():
         reporter = ConstantsReporter()
     elif args.names:
         reporter = NamesReporter()
+    elif args.jumps:
+        reporter = JumpsReporter()
     else:
         reporter = Reporter()
     hits = 0

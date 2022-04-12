@@ -1,3 +1,4 @@
+from collections import namedtuple
 import configparser
 import json
 import os
@@ -70,6 +71,72 @@ def _check_name(name, *, loose=False):
         raise ValueError(orig)
 
 
+class Version(namedtuple('Version', 'major minor micro level serial')):
+
+    prefix = None
+
+    @classmethod
+    def parse(cls, verstr):
+        m = re.match(r'^(v)?(\d+)\.(\d+)(?:\.(\d+))?(?:(a|b|c|rc|f)(\d+))?$',
+                     verstr)
+        if not m:
+            return None
+        prefix, major, minor, micro, level, serial = m.groups()
+        if level == 'a':
+            level = 'alpha'
+        elif level == 'b':
+            level = 'beta'
+        elif level in ('c', 'rc'):
+            level = 'candidate'
+        elif level == 'f':
+            level = 'final'
+        elif level:
+            raise NotImplementedError(repr(verstr))
+        self = cls(
+            int(major),
+            int(minor),
+            int(micro) if micro else 0,
+            level or 'final',
+            int(serial) if serial else 0,
+        )
+        if prefix:
+            self.prefix = prefix
+        return self
+
+    def as_tag(self):
+        micro = f'.{self.micro}' if self.micro else ''
+        if self.level == 'alpha':
+            release = f'a{self.serial}'
+        elif self.level == 'beta':
+            release = f'b{self.serial}'
+        elif self.level == 'candidate':
+            release = f'rc{self.serial}'
+        elif self.level == 'final':
+            release = ''
+        else:
+            raise NotImplementedError(self.level)
+        return f'v{self.major}.{self.minor}{micro}{release}'
+
+
+def _read_file(filename):
+    with open(filename) as infile:
+        return infile.read()
+
+
+##################################
+# git utils
+
+def git(*args, GIT=shutil.which('git')):
+    print(f'# running: {" ".join(args)}')
+    proc = subprocess.run(
+        [GIT, *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8',
+    )
+    return proc.returncode, proc.stdout
+
+
 class GitHubTarget(types.SimpleNamespace):
 
     @classmethod
@@ -103,6 +170,16 @@ class GitHubTarget(types.SimpleNamespace):
         return self.org if self.upstream else 'upstream'
 
     @property
+    def fullref(self):
+        if self.ref:
+            if _looks_like_git_revision(self.ref):
+                return self.ref
+            branch = self.ref
+        else:
+            branch = 'main'
+        return f'{self.remote}/{branch}' if self.remote else branch
+
+    @property
     def url(self):
         return f'https://github.com/{self.org}/{self.project}'
 
@@ -116,14 +193,16 @@ class GitHubTarget(types.SimpleNamespace):
             org=self.org,
             project=self.project,
             ref=ref or self.ref,
+            remote_name=self.remote_name,
             upstream=self.upstream,
         )
 
-    def fork(self, org, project=None, ref=None):
+    def fork(self, org, project=None, ref=None, remote_name=None):
         return type(self)(
             org=org,
             project=project or self.project,
             ref=ref or self.ref,
+            remote_name=remote_name,
             upstream=self,
         )
 
@@ -218,26 +297,116 @@ def _looks_like_git_revision(value):
 #    return revision, branch
 
 
-def _resolve_git_revision_and_branch(revision, branch):
-    if not revision:
-        if not branch:
-            raise ValueError('missing revision')
-        if re.match(r'^[a-fA-F0-9]{4,40}$', branch):
-            # XXX
-            ...
-    elif not branch:
-        if re.match(r'^[\w-]+$', revision):
-            # XXX
-            ...
+def _find_git_ref(remote, ref, latest=False):
+    version = Version.parse(ref)
+    if version:
+        if not latest and ref != f'{version.major}.{version.minor}':
+            ref = version.as_tag()
+    elif latest:
+        raise ValueError(f'expected version, got {ref!r}')
+    # Get the full list of refs for the remote.
+    if remote == 'origin' or not remote:
+        url = 'https://github.com/python/cpython'
+    elif remote == 'upstream':
+        url = 'https://github.com/faster-cpython/cpython'
+    else:
+        url = f'https://github.com/{remote}/cpython'
+    ec, text = git('ls-remote', '--refs', '--tags', '--heads', url)
+    if ec != 0:
+        return None, None, None
+    branches = {}
+    tags = {}
+    for line in text.splitlines():
+        m = re.match(r'^([a-zA-Z0-9]+)\s+refs/(heads|tags)/(\S.*)$', line)
+        if not m:
+            continue
+        commit, kind, name = m.groups()
+        if kind == 'heads':
+            group = branches
+        elif kind == 'tags':
+            group = tags
         else:
-            branch = None
+            raise NotImplementedError
+        group[name] = commit
+    # Find the matching ref.
+    if latest:
+        branch = f'{version.major}.{version.minor}'
+        matched = {}
+        # Find the latest tag that matches the branch.
+        for tag in tags:
+            tagver = Version.parse(tag)
+            if tagver and f'{tagver.major}.{tagver.minor}' == branch:
+                matched[tagver] = tags[tag]
+        if matched:
+            key = sorted(matched)[-1]
+            commit = matched[key]
+            return branch, key.as_tag(), commit
+        # Fall back to the branch.
+        for name in branches:
+            if name != branch:
+                continue
+            commit = branches[branch]
+            return branch, None, commit
+        else:
+            return None, None, None
+    else:
+        # Match branches first.
+        for branch in branches:
+            if branch != ref:
+                continue
+            commit = branches[branch]
+            return branch, None, commit
+        # Then try tags.
+        if version:
+            for tag in tags:
+                tagver = Version.parse(tag)
+                if tagver != version:
+                    continue
+                commit = tags[tag]
+                branch = f'{version.major}.{version.minor}'
+                if branch not in branches:
+                    branch = None
+                return branch, version.as_tag(), commit
+        else:
+            for tag in tags:
+                if name != tag:
+                    continue
+                branch = None
+                commit = tags[tag]
+                return branch, version.as_tag(), commit
+        return None, None, None
 
-    return revision, branch
 
+def _resolve_git_revision_and_branch(revision, branch, remote):
+    if not branch:
+        branch = _branch = None
+    elif not _looks_like_git_branch(branch):
+        raise ValueError(f'bad branch {branch!r}')
 
-def _read_file(filename):
-    with open(filename) as infile:
-        return infile.read()
+    if not revision:
+        raise ValueError('missing revision')
+    if revision == 'latest':
+        if not branch:
+            raise ValueError('missing branch')
+        if not re.match(r'^\d+\.\d+$', branch):
+            raise ValueError(f'expected version branch, got {branch!r}')
+        _, tag, revision = _find_git_ref(remote, branch, latest=True)
+        if not revision:
+            raise ValueError(f'branch {branch!r} not found')
+    elif not _looks_like_git_revision(revision):
+        # It must be a branch or tag.
+        _branch, tag, _revision = _find_git_ref(remote, revision)
+        if not revision:
+            raise ValueError(f'bad revision {revision!r}')
+        revision = _revision
+    elif _looks_like_git_branch(revision):
+        # It might be a branch or tag.
+        _branch, tag, _revision = _find_git_ref(remote, revision)
+        if revision:
+            revision = _revision
+    else:
+        tag = None
+    return revision, branch or _branch, tag
 
 
 ##################################
@@ -480,8 +649,10 @@ class BenchCompileRequest(types.SimpleNamespace):
     CPYTHON = GitHubTarget.origin('python', 'cpython')
     PYPERFORMANCE = GitHubTarget.origin('python', 'pyperformance')
     PYSTON_BENCHMARKS = GitHubTarget.origin('pyston', 'python-macrobenchmarks')
-    pyperformance = PYPERFORMANCE.copy('bc47417')  # main from 2021-10-21
-    pyston_benchmarks = PYSTON_BENCHMARKS.copy('96730b0')  # main from 2021-07-15
+
+    #pyperformance = PYPERFORMANCE.copy('034f58b')  # 1.0.4 release (2022-01-26)
+    pyperformance = PYPERFORMANCE.copy('5b6142e')  # will be 1.0.5 release
+    pyston_benchmarks = PYSTON_BENCHMARKS.copy('96e7bb3')  # main from 2022-01-21
     #pyperformance = PYPERFORMANCE.fork('ericsnowcurrently', 'python-performance', 'benchmark-management')
     #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
 
@@ -525,7 +696,7 @@ def _resolve_bench_compile_request(cfg, remote, revision, branch, benchmarks, *,
                                    ):
     user = _resolve_user(cfg)
     reqid = next_req_id(user, cfg=cfg)
-    revision, branch = _resolve_git_revision_and_branch(revision, branch)
+    commit, branch, tag = _resolve_git_revision_and_branch(revision, branch, remote)
     if isinstance(benchmarks, str):
         benchmarks = benchmarks.replace(',', ' ').split()
     if benchmarks:
@@ -534,8 +705,9 @@ def _resolve_bench_compile_request(cfg, remote, revision, branch, benchmarks, *,
 
     meta = BenchCompileRequest(
         id=reqid,
-        ref=revision,
-        remote=_resolve_git_remote(remote, user, branch, revision),
+        # XXX Add a "commit" field and use "tag or branch" for ref.
+        ref=commit,
+        remote=_resolve_git_remote(remote, user, branch, commit),
         branch=branch,
         benchmarks=benchmarks or None,
         optimize=bool(optimize),
@@ -649,31 +821,30 @@ def _build_compile_script(cfg, req):
         if [ "$remote" != 'origin' ]; then
             ( set -x
             2>/dev/null git -C "{bfiles.pyperformance}" remote add "{req.pyperformance.remote}" "{req.pyperformance.url}"
-            git -C "{bfiles.pyperformance}" fetch --tags "{req.pyperformance.remote}"
             )
         fi
         ( set -x
-        git -C "{bfiles.pyperformance}" checkout "{req.pyperformance.remote}/{req.pyperformance.ref or 'main'}"
+        git -C "{bfiles.pyperformance}" fetch --tags "{req.pyperformance.remote}"
+        git -C "{bfiles.pyperformance}" checkout "{req.pyperformance.fullref}"
         )
 
         remote="{req.pyston_benchmarks.remote}"
         if [ "$remote" != 'origin' ]; then
             ( set -x
             2>/dev/null git -C "{bfiles.pyston_benchmarks}" remote add "{req.pyston_benchmarks.remote}" "{req.pyston_benchmarks.url}"
-            git -C "{bfiles.pyston_benchmarks}" fetch --tags "{req.pyston_benchmarks.remote}"
             )
         fi
         ( set -x
-        git -C "{bfiles.pyston_benchmarks}" checkout "{req.pyston_benchmarks.remote}/{req.pyston_benchmarks.ref or 'main'}"
+        git -C "{bfiles.pyston_benchmarks}" fetch --tags "{req.pyston_benchmarks.remote}"
+        git -C "{bfiles.pyston_benchmarks}" checkout "{req.pyston_benchmarks.fullref}"
         )
 
         #####################
         # Run the benchmarks.
 
         ( set -x
-        PYTHONPATH={bfiles.pyperformance} MAKEFLAGS="-j{numjobs}" \\
-            "{python}" -m pyperformance compile \\
-            --venv "{bfiles.venv}" \\
+        MAKEFLAGS="-j{numjobs}" \\
+            "{python}" {bfiles.pyperformance}/dev.py compile \\
             "{pfiles.compile_config}" \\
             "{req.ref}" {('"' + req.branch + '"') if req.branch else ''} \\
             2>&1 | tee {pfiles.results_log}
