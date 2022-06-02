@@ -929,8 +929,22 @@ def looks_like_git_ref(value):
         return False
 
 
-def git(*args, cwd=HOME, GIT=shutil.which('git')):
-    proc = run_fg(GIT, *args, cwd=cwd)
+def git(cmd, *args, cwd=HOME, cfg=None, GIT=shutil.which('git')):
+    env = dict(os.environ)
+    preargs = []
+    if cfg:
+        for name, value in cfg.items():
+            if value is None:
+                raise NotImplementedError
+            value = str(value)
+            preargs.extend(['-c', f'{name}={value}'])
+            if name == 'user.name':
+                env['GIT_AUTHOR_NAME'] = value
+                env['GIT_COMMITTER_NAME'] = value
+            elif name == 'user.email':
+                env['GIT_AUTHOR_EMAIL'] = value
+                env['GIT_COMMITTER_EMAIL'] = value
+    proc = run_fg(GIT, *preargs, cmd, *args, cwd=cwd, env=env)
     return proc.returncode, proc.stdout
 
 
@@ -1591,10 +1605,22 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
     @property
     def full(self):
         ref = self.name
-        if not ref and self.commit:
+        if ref:
+            if ref == self.branch:
+                if self.commit:
+                    ref = f'{ref} ({self.commit[:8]})'
+        elif self.commit:
+            ref = self.commit
+        else:
+            ref = '???'
+        if ref == self.commit:
+            branch = self.branch if self.branch != 'main' else None
             # XXX Is this an okay shortening?
-            ref = self.commit[:12]
-        return f'{self.remote}:{ref}' if self.remote else ref
+            ref = f'{branch} ({ref[:8]})' if branch else ref[:12]
+        if self.remote and self.remote != 'origin':
+            return f'{self.remote}:{ref}'
+        else:
+            return ref
 
     def as_jsonable(self):
         data = self._asdict()
@@ -1908,6 +1934,31 @@ class TopConfig(Config):
 
 ##################################
 # network utils
+
+# We don't bother going full RFC 5322.
+# See http://emailregex.com/.
+DOMAIN_PART = r'(?:\b[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\b)'
+DOMAIN_NAME = rf'(?:\b{DOMAIN_PART}(?:\.{DOMAIN_PART})+\b)'
+EMAIL_USER = r'(?:\b[\w+-]+(?:\.[\w+-]+)*\b)'
+EMAIL_ADDR = rf'(?:\b{EMAIL_USER}@{DOMAIN_NAME}\b)'
+EMAIL = rf'(?:.* <{EMAIL_ADDR}>|{EMAIL_ADDR})'
+
+
+def parse_email_address(addr):
+    if not addr:
+        raise ValueError('missing addr')
+    elif isinstance(addr, str):
+        m = re.match(f'^({EMAIL_ADDR})|(\S.*) <({EMAIL_ADDR})>$', addr)
+        if not m:
+            return None
+        addr1, name2, addr2 = m.groups()
+        if addr1:
+            return (None, addr1)
+        else:
+            return (name2.strip(), addr2)
+    else:
+        raise NotImplementedError(addr)
+
 
 class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
 
