@@ -2731,17 +2731,26 @@ class Config(types.SimpleNamespace):
             filename = os.path.abspath(os.path.expanduser(filename))
             if filename in seen:
                 continue
+            logger.debug('# including config from %s', filename)
             seen.add(filename)
             text = read_file(filename, fail=False)
             if not text:
+                if not os.path.exists(filename):
+                    logger.debug('# (not found)')
+                else:
+                    logger.debug('# (empty or could not be read)')
                 continue
             included = json.loads(text)
             included['_filename'] = filename
             yield included
 
-            subincludes = included.get('include')
+            subincludes = included.pop('include', ())
             if subincludes:
                 yield from cls._load_includes(subincludes, seen)
+
+    @classmethod
+    def from_jsonable(cls, data):
+        return cls(**data)
 
     def __init__(self, **kwargs):
         for name in list(kwargs):

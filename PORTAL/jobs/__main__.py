@@ -6,12 +6,15 @@ import sys
 import traceback
 
 from . import (
-    NoRunningJobError, JobNeverStartedError,
-    JobAlreadyFinishedError, JobFinishedError,
-    RequestAlreadyStagedError,
-    JobsConfig, Jobs, Worker, RequestID, Result,
+    NoRunningJobError,
+    JobsConfig, Jobs,
     sort_jobs, select_jobs,
 )
+from ._job import (
+    JobNeverStartedError, JobAlreadyFinishedError, JobFinishedError,
+)
+from ._current import RequestAlreadyStagedError
+from .requests import RequestID, Result
 from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
@@ -845,14 +848,14 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     common.add_argument('-q', '--quiet', action='count', default=0)
     if add_hidden:
         common.add_argument('--config', dest='cfgfile', metavar='FILE',
-                            help='(default: ~benchmarking/BENCH/portal.json))')
+                            help='(default: ~benchmarking/BENCH/jobs.json))')
         common.add_argument('--logfile', metavar='FILE')
         args, argv = common.parse_known_args(argv)
         cfgfile = args.cfgfile
         logfile = args.logfile
     else:
         args, argv = common.parse_known_args(argv)
-        cfgile = None
+        cfgfile = None
         logfile = None
     verbosity = max(0, VERBOSITY + args.verbose - args.quiet)
 
