@@ -4,6 +4,10 @@ import os
 import os.path
 import sys
 import traceback
+from typing import (
+    Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional,
+    Sequence, Tuple, Union
+)
 
 from . import (
     NoRunningJobError,
@@ -11,7 +15,7 @@ from . import (
     sort_jobs, select_jobs,
 )
 from ._job import (
-    JobNeverStartedError, JobAlreadyFinishedError, JobFinishedError,
+    Job, JobNeverStartedError, JobAlreadyFinishedError, JobFinishedError,
 )
 from ._current import RequestAlreadyStagedError
 from .requests import RequestID, Result
@@ -33,11 +37,14 @@ logger = logging.getLogger(__name__)
 ##################################
 # commands
 
-def cmd_list(jobs, selections=None, columns=None):
+def cmd_list(
+        jobs: Jobs,
+        selections: Optional[Union[str, Sequence[str]]] = None,
+        columns: Optional[str] = None
+) -> None:
 #    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
-    alljobs = list(jobs.iter_all())
+    alljobs = sort_jobs(list(jobs.iter_all()))
     total = len(alljobs)
-    alljobs = sort_jobs(alljobs)
     selected = list(select_jobs(alljobs, selections))
 
     colspecs = [
@@ -61,23 +68,22 @@ def cmd_list(jobs, selections=None, columns=None):
 
     rows = (j.as_row() for j in selected)
     periodic = [table.div, table.header, table.div]
-    rows = table.render_rows(rows, periodic, len(selected))
+    rendered_rows = table.render_rows(rows, periodic, len(selected))
 
     logger.info('(all times in UTC)')
     logger.info('')
     logger.info(table.div)
     print(table.header)
     print(table.div)
-    for line in rows:
+    for line in rendered_rows:
         print(line)
     logger.info(table.div)
-    for line in rows.render_count(total):
+    for line in rendered_rows.render_count(total):
         logger.info(line)
     logger.info('')
 
     current = jobs.get_current()
-    current = current.reqid if current else 'none'
-    logger.info(f'Currently running: {current}')
+    logger.info(f'Currently running: {current if current else "none"}')
     logger.info('')
 
     queue = jobs.queue.snapshot
@@ -89,7 +95,13 @@ def cmd_list(jobs, selections=None, columns=None):
     logger.info('')
 
 
-def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
+def cmd_show(
+        jobs: Jobs,
+        reqid: Optional[RequestID] = None,
+        fmt: Optional[str] = None,
+        *,
+        lines: Optional[Sequence[str]] = None
+) -> None:
     job = jobs.get(reqid)
     if not job:
         # XXX Use the last finished?
@@ -103,14 +115,18 @@ def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
         tail_file(job.fs.logfile, lines, follow=False)
 
 
-def cmd_request_compile_bench(jobs, reqid, revision, *,
-                              remote=None,
-                              branch=None,
-                              benchmarks=None,
-                              optimize=True,
-                              debug=False,
-                              _fake=None,
-                              ):
+def cmd_request_compile_bench(
+        jobs: Jobs,
+        reqid: Optional[RequestID],
+        revision: str,
+        *,
+        remote: Optional[str] = None,
+        branch: Optional[str] = None,
+        benchmarks: Optional[str] = None,
+        optimize: bool = True,
+        debug: bool = False,
+        _fake: Any = None,
+) -> Job:
     if not reqid:
         raise NotImplementedError
     assert reqid.kind == 'compile-bench', reqid
@@ -134,15 +150,21 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
     return job
 
 
-def cmd_copy(jobs, reqid=None):
+def cmd_copy(jobs: Jobs, reqid: Optional[RequestID] = None) -> None:
     raise NotImplementedError
 
 
-def cmd_remove(jobs, reqid):
+def cmd_remove(jobs: Jobs, reqid: RequestID):
     raise NotImplementedError
 
 
-def cmd_run(jobs, reqid, *, copy=False, force=False):
+def cmd_run(
+        jobs: Jobs,
+        reqid: RequestID,
+        *,
+        copy: bool = False,
+        force: bool = False
+) -> None:
     if copy:
         raise NotImplementedError
     if force:
@@ -158,7 +180,7 @@ def cmd_run(jobs, reqid, *, copy=False, force=False):
         job.check_ssh(onunknown='wait:3')
 
 
-def _cmd_run(jobs, reqid):
+def _cmd_run(jobs: Jobs, reqid: RequestID) -> Job:
     # Try staging it directly.
     try:
         job = jobs.activate(reqid)
@@ -169,15 +191,21 @@ def _cmd_run(jobs, reqid):
     except Exception:
         logger.error('could not stage request')
         logger.info('')
-        job = jobs.get(reqid)
-        job.set_status('failed')
+        job_lookup = jobs.get(reqid)
+        assert job_lookup is not None
+        job_lookup.set_status('failed')
         raise  # re-raise
     else:
         job.run(background=True)
         return job
 
 
-def cmd_attach(jobs, reqid=None, *, lines=None):
+def cmd_attach(
+        jobs: Jobs,
+        reqid: Optional[RequestID] = None,
+        *,
+        lines: Iterable[str] = None
+) -> None:
     try:
         try:
             job, pid = jobs.wait_until_job_started(reqid)
@@ -190,13 +218,21 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
         job.attach(lines)
     except JobNeverStartedError:
         # XXX Optionally wait anyway?
-        logger.warn('job not started')
+        logger.warning('job not started')
     except JobFinishedError:
         # It already finished.
         pass
 
 
-def cmd_cancel(jobs, reqid=None, *, _status=None):
+def cmd_cancel(
+        jobs: Jobs,
+        reqid: Optional[RequestID] = None,
+        *,
+        _status: Optional[str] = None
+) -> None:
+    job: Optional[Job]
+    current: Optional[Job]
+
     if not reqid:
         try:
             job = current = jobs.cancel_current(ifstatus=_status)
@@ -209,15 +245,20 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
             try:
                 job = jobs.cancel_current(current.reqid, ifstatus=_status)
             except NoRunningJobError:
-                logger.warn('job just finished')
+                logger.warning('job just finished')
+                return
         else:
             cmd_queue_remove(jobs, reqid)
             job = jobs.get(reqid)
-            job.cancel(ifstatus=_status)
+            if job:
+                job.cancel(ifstatus=_status)
+            else:
+                raise RuntimeError(f"Couldn't get job for {reqid}")
 
     logger.info('')
     logger.info('Results:')
     # XXX Show something better?
+
     for line in job.render(fmt='resfile'):
         logger.info(line)
 
@@ -225,7 +266,7 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
         jobs.ensure_next()
 
 
-def cmd_wait(jobs, reqid=None):
+def cmd_wait(jobs: Jobs, reqid: Optional[RequestID] = None) -> None:
     try:
         try:
             job, pid = jobs.wait_until_job_started(reqid)
@@ -239,33 +280,53 @@ def cmd_wait(jobs, reqid=None):
             job.wait_until_finished(pid)
     except JobNeverStartedError as exc:
         # XXX Optionally wait anyway?
-        logger.warn('job not started')
+        logger.warning('job not started')
     except JobFinishedError:
         # It already finished.
         pass
 
 
-def cmd_upload(jobs, reqid, *, author=None, clean=True, push=True):
+def cmd_upload(
+        jobs: Jobs,
+        reqid: RequestID,
+        *,
+        author: Optional[str] = None,
+        clean: bool = True,
+        push: bool = True
+) -> None:
     job = jobs.get(reqid)
-    job.upload_result(author, clean=clean, push=push)
+    if job:
+        job.upload_result(author, clean=clean, push=push)
+    else:
+        raise RuntimeError(f"Couldn't get job for {reqid}")
 
 
-def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
+def cmd_compare(
+        jobs: Jobs,
+        res1: str,
+        others: List[str],
+        *,
+        meanonly: bool = False,
+        pyston: bool = False
+) -> None:
     suites = ['pyston'] if pyston else ['pyperformance']
     matched = list(jobs.match_results(res1, suites=suites))
     if not matched:
         logger.error(f'no results matched {res1!r}')
         sys.exit(1)
-    res1, = matched
+    res1_matched, = matched
+    others_matched = []
     for _ in range(len(others)):
         spec = others.pop(0)
         matched = list(jobs.match_results(spec, suites=suites))
         if not matched:
             logger.error(f'no results matched {spec!r}')
             sys.exit(1)
-        others.extend(matched)
+        others_matched.extend(matched)
     #others = [*jobs.match_results(r) for r in others]
-    compared = res1.compare(others)
+    compared = res1_matched.compare(others_matched)
+    if compared is None:
+        raise RuntimeError("Could not get comparison")
     table = compared.table
     fmt = 'meanonly' if meanonly else 'raw'
     for line in table.render(fmt):
@@ -273,7 +334,7 @@ def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
 
 
 # internal
-def cmd_finish_run(jobs, reqid):
+def cmd_finish_run(jobs: Jobs, reqid: RequestID) -> None:
     job = jobs.finish_successful(reqid)
 
     logger.info('')
@@ -284,7 +345,7 @@ def cmd_finish_run(jobs, reqid):
 
 
 # internal
-def cmd_run_next(jobs):
+def cmd_run_next(jobs: Jobs) -> None:
     logentry = LogSection.from_title('Running next queued job')
     print()
     for line in logentry.render():
@@ -302,7 +363,10 @@ def cmd_run_next(jobs):
     try:
         try:
             job = jobs.get(reqid)
-            status = job.get_status()
+            if job:
+                status = job.get_status()
+            else:
+                raise ValueError("Couldn't get job for {reqid}")
         except Exception:
             logger.error('could not load results metadata')
             logger.warning('%s status could not be updated (to "failed")', reqid)
@@ -314,12 +378,12 @@ def cmd_run_next(jobs):
             return
 
         if not status:
-            logger.warn('queued request (%s) not found', reqid)
+            logger.warning('queued request (%s) not found', reqid)
             logger.info('trying next job...')
             cmd_run_next(jobs)
             return
         elif status is not Result.STATUS.PENDING:
-            logger.warn('expected "pending" status for queued request %s, got %r', reqid, status)
+            logger.warning('expected "pending" status for queued request %s, got %r', reqid, status)
             # XXX Give the option to force the status to "activated"?
             logger.info('trying next job...')
             cmd_run_next(jobs)
@@ -330,19 +394,19 @@ def cmd_run_next(jobs):
         logger.info('')
         try:
             _cmd_run(jobs, reqid)
-        except RequestAlreadyStagedError:
+        except RequestAlreadyStagedError as exc:
             if reqid == exc.curid:
-                logger.warn('%s is already running', reqid)
+                logger.warning('%s is already running', reqid)
                 # XXX Check the pidfile?
             else:
-                logger.warn('another job is already running, adding %s back to the queue', reqid)
+                logger.warning('another job is already running, adding %s back to the queue', reqid)
                 jobs.queue.unpop(reqid)
     except KeyboardInterrupt:
         cmd_cancel(jobs, reqid, _status=Result.STATUS.PENDING)
         raise  # re-raise
 
 
-def cmd_queue_info(jobs, *, withlog=True):
+def cmd_queue_info(jobs: Jobs, *, withlog: bool = True) -> None:
     _queue = jobs.queue.snapshot
     queued = _queue.jobs
     paused = _queue.paused
@@ -389,10 +453,10 @@ def cmd_queue_info(jobs, *, withlog=True):
             print('  (log is empty)')
 
 
-def cmd_queue_list(jobs):
+def cmd_queue_list(jobs: Jobs) -> None:
     queue = jobs.queue.snapshot
     if queue.paused:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
 
     if not queue:
         print('no jobs queued')
@@ -405,29 +469,32 @@ def cmd_queue_list(jobs):
     print(f'(total: {i})')
 
 
-def cmd_queue_pause(jobs):
+def cmd_queue_pause(jobs: Jobs) -> None:
     try:
        jobs.queue.pause()
     except JobQueuePausedError:
-        logger.warn('job queue was already paused')
+        logger.warning('job queue was already paused')
     else:
         logger.info('job queue paused')
 
 
-def cmd_queue_unpause(jobs):
+def cmd_queue_unpause(jobs: Jobs) -> None:
     try:
        jobs.queue.unpause()
     except JobQueueNotPausedError:
-        logger.warn('job queue was not paused')
+        logger.warning('job queue was not paused')
     else:
         logger.info('job queue unpaused')
         jobs.ensure_next()
 
 
-def cmd_queue_push(jobs, reqid):
+def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
     reqid = RequestID.from_raw(reqid)
     logger.info(f'Adding job {reqid} to the queue')
     job = jobs.get(reqid)
+    if not job:
+        logger.error('request %s not found', reqid)
+        sys.exit(1)
 
     status = job.get_status()
     if not status:
@@ -438,14 +505,14 @@ def cmd_queue_push(jobs, reqid):
         sys.exit(1)
 
     if jobs.queue.paused:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
 
     try:
         pos = jobs.queue.push(reqid)
     except JobAlreadyQueuedError:
         for pos, queued in enumerate(jobs.queue, 1):
             if queued == reqid:
-                logger.warn('%s was already queued', reqid)
+                logger.warning('%s was already queued', reqid)
                 break
         else:
             raise NotImplementedError
@@ -457,23 +524,26 @@ def cmd_queue_push(jobs, reqid):
     jobs.ensure_next()
 
 
-def cmd_queue_pop(jobs):
+def cmd_queue_pop(jobs: Jobs) -> None:
     logger.info(f'Popping the next job from the queue...')
     try:
         reqid = jobs.queue.pop()
     except JobQueuePausedError:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
         return
     except JobQueueEmptyError:
         logger.error('job queue is empty')
         sys.exit(1)
     job = jobs.get(reqid)
+    if not job:
+        logger.warning('queued request (%s) not found', reqid)
+        return
 
     status = job.get_status()
     if not status:
-        logger.warn('queued request (%s) not found', reqid)
+        logger.warning('queued request (%s) not found', reqid)
     elif status is not Result.STATUS.PENDING:
-        logger.warn(f'expected "pending" status for queued request %s, got %r', reqid, status)
+        logger.warning(f'expected "pending" status for queued request %s, got %r', reqid, status)
         # XXX Give the option to force the status to "activated"?
     else:
         # XXX Set the status to "activated"?
@@ -482,7 +552,12 @@ def cmd_queue_pop(jobs):
     print(reqid)
 
 
-def cmd_queue_move(jobs, reqid, position, relative=None):
+def cmd_queue_move(
+        jobs: Jobs,
+        reqid: RequestID,
+        position: int,
+        relative: str = None
+) -> None:
     position = int(position)
     if position <= 0:
         raise ValueError(f'expected positive position, got {position}')
@@ -495,39 +570,45 @@ def cmd_queue_move(jobs, reqid, position, relative=None):
     else:
         logger.info('Moving job %s to position %s in the queue...', reqid, position)
     job = jobs.get(reqid)
+    if not job:
+        logger.error('request %s not found', reqid)
+        sys.exit(1)
 
     if jobs.queue.paused:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
 
     status = job.get_status()
     if not status:
         logger.error('request %s not found', reqid)
         sys.exit(1)
     elif status is not Result.STATUS.PENDING:
-        logger.warn('request %s has been updated since queued', reqid)
+        logger.warning('request %s has been updated since queued', reqid)
 
     pos = jobs.queue.move(reqid, position, relative)
     logger.info('...moved to position %s', pos)
 
 
-def cmd_queue_remove(jobs, reqid):
+def cmd_queue_remove(jobs: Jobs, reqid: RequestID) -> None:
     reqid = RequestID.from_raw(reqid)
     logger.info('Removing job %s from the queue...', reqid)
     job = jobs.get(reqid)
+    if not job:
+        logger.warning('request %s not found', reqid)
+        return
 
     if jobs.queue.paused:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
 
     status = job.get_status()
     if not status:
-        logger.warn('request %s not found', reqid)
+        logger.warning('request %s not found', reqid)
     elif status is not Result.STATUS.PENDING:
-        logger.warn('request %s has been updated since queued', reqid)
+        logger.warning('request %s has been updated since queued', reqid)
 
     try:
         jobs.queue.remove(reqid)
     except JobNotQueuedError:
-        logger.warn('%s was not queued', reqid)
+        logger.warning('%s was not queued', reqid)
 
     if status is Result.STATUS.PENDING:
         job.set_status('created')
@@ -535,16 +616,16 @@ def cmd_queue_remove(jobs, reqid):
     logger.info('...done!')
 
 
-def cmd_config_show(jobs):
+def cmd_config_show(jobs: Jobs) -> None:
     for line in jobs.cfg.render():
         print(line)
 
 
-def cmd_bench_host_clean(jobs):
+def cmd_bench_host_clean(jobs: Jobs) -> None:
     raise NotImplementedError
 
 
-COMMANDS = {
+COMMANDS: Mapping[str, Callable] = {
     # job management
     'list': cmd_list,
     'show': cmd_show,
@@ -582,9 +663,12 @@ COMMANDS = {
 VERBOSITY = 3
 
 
-def configure_root_logger(verbosity=VERBOSITY, logfile=None, *,
-                          maxlevel=logging.CRITICAL,
-                          ):
+def configure_root_logger(
+        verbosity: int = VERBOSITY,
+        logfile: Optional[str] = None,
+        *,
+        maxlevel: int = logging.CRITICAL,
+) -> None:
     logger = logging.getLogger()
 
     level = max(1,  # 0 disables it, so we use the next lowest.
@@ -594,6 +678,7 @@ def configure_root_logger(verbosity=VERBOSITY, logfile=None, *,
     #logger.propagate = False
 
     assert not logger.handlers, logger.handlers
+    handler: Any
     if logfile:
         handler = logging.FileHandler(logfile)
     else:
@@ -612,10 +697,10 @@ def configure_root_logger(verbosity=VERBOSITY, logfile=None, *,
 
     if not os.isatty(sys.stdout.fileno()):
         global print
-        print = (lambda m='': logger.info(m))
+        print = (lambda m='': logger.info(m))  # type: ignore[name-defined]
 
 
-def _add_request_cli(add_cmd, add_hidden=True):
+def _add_request_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     compile_bench = argparse.ArgumentParser(add_help=False)
     compile_bench.add_argument('--optimize', dest='optimize',
                                action='store_const', const=True, default=True,
@@ -729,7 +814,7 @@ def _add_request_cli(add_cmd, add_hidden=True):
     return handle_args
 
 
-def _add_queue_cli(add_cmd, add_hidden=True):
+def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     if not add_hidden:
         return (lambda *a, **k: None)
 
@@ -800,7 +885,7 @@ def _add_queue_cli(add_cmd, add_hidden=True):
     return handle_args
 
 
-def _add_config_cli(add_cmd, add_hidden=True):
+def _add_config_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     if not add_hidden:
         return (lambda *a, **k: None)
     sub = add_cmd('config', help='Show the config')
@@ -812,7 +897,7 @@ def _add_config_cli(add_cmd, add_hidden=True):
     return handle_args
 
 
-def _add_bench_host_cli(add_cmd, add_hidden=True):
+def _add_bench_host_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     if not add_hidden:
         return (lambda *a, **k: None)
     sub = add_cmd('bench-host', help='Manage the host where benchmarks run')
@@ -827,7 +912,10 @@ def _add_bench_host_cli(add_cmd, add_hidden=True):
     return handle_args
 
 
-def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
+def parse_args(
+        argv: Sequence[str] = sys.argv[1:],
+        prog: str = sys.argv[0]
+) -> Tuple[str, Dict[str, Any], str, str, int, str, bool]:
 
     ##########
     # Resolve dev mode.
@@ -988,7 +1076,13 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return cmd, ns, cfgfile, user, verbosity, logfile, devmode
 
 
-def main(cmd, cmd_kwargs, cfgfile=None, user=None, devmode=False):
+def main(
+        cmd: str,
+        cmd_kwargs: MutableMapping[str, Any],
+        cfgfile: Optional[str] = None,
+        user: Optional[str] = None,
+        devmode: bool = False
+) -> None:
     try:
         run_cmd = COMMANDS[cmd]
     except KeyError:
@@ -1056,16 +1150,16 @@ def main(cmd, cmd_kwargs, cfgfile=None, user=None, devmode=False):
             logger.info(line)
 
     # Run "after" commands, if any
-    for cmd, run_cmd, cmd_kwargs in after:
+    for _cmd, _run_cmd, _cmd_kwargs in after:
         logger.info('')
         logger.info('#'*40)
         if reqid:
-            logger.info('# Running %r command for request %s', cmd, reqid)
+            logger.info('# Running %r command for request %s', _cmd, reqid)
         else:
-            logger.info('# Running %r command', cmd)
+            logger.info('# Running %r command', _cmd)
         logger.info('')
         # XXX Add --lines='-1' for attach.
-        run_cmd(jobs, reqid=reqid, **(cmd_kwargs or {}))
+        run_cmd(jobs, reqid=reqid, **(_cmd_kwargs or {}))
 
 
 if __name__ == '__main__':
