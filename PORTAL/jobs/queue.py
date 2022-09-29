@@ -34,6 +34,7 @@ else:
 ##################################
 # the job queue
 
+
 class JobQueueError(Exception):
     MSG = 'some problem with the job queue'
 
@@ -243,7 +244,6 @@ class JobQueue:
         except _utils.InvalidPIDFileError as exc:
             locked = (exc.text, None)
         else:
-            assert pid is not None
             locked = (pid, bool(pid))
         return JobQueueSnapshot(
             datafile=self._datafile,

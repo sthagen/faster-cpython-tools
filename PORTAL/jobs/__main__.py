@@ -25,7 +25,7 @@ from .queue import (
 )
 #from ._pyperformance import PyperfTable
 from ._utils import (
-    LogSection, tail_file, render_file, get_bool_env_var, TableSpec,
+    LogSection, tail_file, render_file, TableSpec,
 )
 
 
@@ -42,7 +42,7 @@ def cmd_list(
         selections: Optional[Union[str, Sequence[str]]] = None,
         columns: Optional[str] = None
 ) -> None:
-#    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
+    # requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
     alljobs = sort_jobs(list(jobs.iter_all()))
     total = len(alljobs)
     selected = list(select_jobs(alljobs, selections))
@@ -278,7 +278,7 @@ def cmd_wait(jobs: Jobs, reqid: Optional[RequestID] = None) -> None:
         else:
             assert pid, job and job.reqid
             job.wait_until_finished(pid)
-    except JobNeverStartedError as exc:
+    except JobNeverStartedError:
         # XXX Optionally wait anyway?
         logger.warning('job not started')
     except JobFinishedError:
@@ -471,7 +471,7 @@ def cmd_queue_list(jobs: Jobs) -> None:
 
 def cmd_queue_pause(jobs: Jobs) -> None:
     try:
-       jobs.queue.pause()
+        jobs.queue.pause()
     except JobQueuePausedError:
         logger.warning('job queue was already paused')
     else:
@@ -480,7 +480,7 @@ def cmd_queue_pause(jobs: Jobs) -> None:
 
 def cmd_queue_unpause(jobs: Jobs) -> None:
     try:
-       jobs.queue.unpause()
+        jobs.queue.unpause()
     except JobQueueNotPausedError:
         logger.warning('job queue was not paused')
     else:
@@ -525,7 +525,7 @@ def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
 
 
 def cmd_queue_pop(jobs: Jobs) -> None:
-    logger.info(f'Popping the next job from the queue...')
+    logger.info('Popping the next job from the queue...')
     try:
         reqid = jobs.queue.pop()
     except JobQueuePausedError:
@@ -543,7 +543,7 @@ def cmd_queue_pop(jobs: Jobs) -> None:
     if not status:
         logger.warning('queued request (%s) not found', reqid)
     elif status is not Result.STATUS.PENDING:
-        logger.warning(f'expected "pending" status for queued request %s, got %r', reqid, status)
+        logger.warning('expected "pending" status for queued request %s, got %r', reqid, status)
         # XXX Give the option to force the status to "activated"?
     else:
         # XXX Set the status to "activated"?
@@ -677,6 +677,11 @@ def configure_root_logger(
     logger.setLevel(level)
     #logger.propagate = False
 
+    # pytest does its own monkey-patching of logging that isn't compatible with
+    # this.
+    if "pytest" in sys.modules:
+        return
+
     assert not logger.handlers, logger.handlers
     handler: Any
     if logfile:
@@ -685,6 +690,7 @@ def configure_root_logger(
         handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
     #formatter = logging.Formatter()
+
     class Formatter(logging.Formatter):
         def format(self, record):
             text = super().format(record)
@@ -765,6 +771,7 @@ def _add_request_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
         if add_hidden:
             _common.add_argument('--upload-arg', dest='uploadargs',
                                  action='append', default=[])
+
         def add_job(job, p=(), **kw):
             return add_cmd(job, jobs, parents=[_common, *p], **kw)
 
@@ -888,7 +895,7 @@ def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
 def _add_config_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     if not add_hidden:
         return (lambda *a, **k: None)
-    sub = add_cmd('config', help='Show the config')
+    add_cmd('config', help='Show the config')
 
     def handle_args(args, parser):
         if args.cmd != 'config':
@@ -901,12 +908,13 @@ def _add_bench_host_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     if not add_hidden:
         return (lambda *a, **k: None)
     sub = add_cmd('bench-host', help='Manage the host where benchmarks run')
-    benchhost = sub.add_subparsers(dest='action')
+    benchhost = sub.add_subparsers(dest='action')  # noqa
     raise NotImplementedError
 
     def handle_args(args, parser):
         if args.cmd != 'bench-host':
             return
+        ns = vars(args)
         action = ns.pop('action')
         args.cmd = f'bench-host-{action}'
     return handle_args
@@ -1167,10 +1175,17 @@ def main(
             logger.info('# Running %r command', _cmd)
         logger.info('')
         # XXX Add --lines='-1' for attach.
-        run_cmd(jobs, reqid=reqid, **(_cmd_kwargs or {}))
+        _run_cmd(jobs, reqid=reqid, **(_cmd_kwargs or {}))
+
+
+def _parse_and_main(
+    argv: Sequence[str] = sys.argv[1:],
+    prog: str = sys.argv[0]
+):
+    cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args(argv, prog)
+    configure_root_logger(verbosity, logfile)
+    main(cmd, cmd_kwargs, cfgfile, user, devmode)
 
 
 if __name__ == '__main__':
-    cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args()
-    configure_root_logger(verbosity, logfile)
-    main(cmd, cmd_kwargs, cfgfile, user, devmode)
+    _parse_and_main()

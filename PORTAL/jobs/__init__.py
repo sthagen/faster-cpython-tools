@@ -24,8 +24,8 @@ class NoRunningJobError(JobsError):
 class JobsConfig(_utils.TopConfig):
     """The jobs-related configuration used on the portal host."""
 
-    FIELDS = ['local_user', 'worker', 'data_dir']
-    OPTIONAL = ['data_dir']
+    FIELDS = ['local_user', 'worker', 'data_dir', 'results_repo_root']
+    OPTIONAL = ['data_dir', 'results_repo_root']
 
     FILE = 'jobs.json'
     CONFIG_DIRS = [
@@ -36,6 +36,7 @@ class JobsConfig(_utils.TopConfig):
                  local_user: str,
                  worker: Optional[Union[str, _workers.WorkerConfig]],
                  data_dir: Optional[str] = None,
+                 results_repo_root: Optional[str] = None,
                  **ignored
                  ):
         if not local_user:
@@ -54,11 +55,21 @@ class JobsConfig(_utils.TopConfig):
             local_user=local_user,
             worker=worker_resolved,
             data_dir=data_dir or None,
+            results_repo_root=results_repo_root
         )
 
     @property
     def ssh(self) -> _utils.SSHConnectionConfig:
         return self.worker.ssh
+
+
+class PortalJobsFS(_common.JobsFS):
+    JOBFS = _job.JobFS
+
+    def __init__(self, root: str):
+        super().__init__(root)
+        self.requests.current = _current.symlink_from_jobsfs(self)
+        #self.current = _current.symlink_from_jobsfs(self)
 
 
 class PortalFS(_utils.FSTree):
@@ -69,11 +80,7 @@ class PortalFS(_utils.FSTree):
 
         super().__init__(root)
 
-        self.jobs = _common.JobsFS(self.root)
-        self.jobs.context = 'portal'
-        self.jobs.JOBFS = _job.JobFS
-
-        self.jobs.requests.current = _current.symlink_from_jobsfs(self.jobs)
+        self.jobs = PortalJobsFS(self.root)
 
         self.queue = queue_mod.JobQueueFS(self.jobs.requests)
 
@@ -92,7 +99,9 @@ class Jobs:
         self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
         self._workers = _workers.Workers.from_config(cfg)
-        self._store = _pyperformance.FasterCPythonResults.from_remote()
+        self._store = _pyperformance.FasterCPythonResults.from_remote(
+            root=getattr(cfg, "results_repo_root", None)
+        )
 
     def __str__(self):
         return self._fs.root
@@ -243,7 +252,7 @@ class Jobs:
                 if timeout is True:
                     timeout = 0
                 # Add the expected time for everything in the queue before the job.
-                for i, queued in enumerate(self.queue.snapshot):
+                for queued in self.queue.snapshot:
                     if queued == reqid:
                         # Play it safe by doubling the timeout.
                         timeout *= 2

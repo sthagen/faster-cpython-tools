@@ -75,7 +75,8 @@ class StagingRequestError(Exception):
 class RequestNotPendingError(StagingRequestError):
 
     def __init__(self, reqid, status=None):
-        super().__init__(reqid, f'could not stage {reqid} (expected pending, got {status or "???"} status)')
+        msg = f'could not stage {reqid} (expected pending, got {status or "???"} status)'
+        super().__init__(reqid, msg)
         self.status = status
 
 
@@ -104,6 +105,7 @@ class RequestNotStagedError(UnstagingRequestError):
 
 
 def symlink_from_jobsfs(jobsfs: _common.JobsFS) -> str:
+    # XXX Use PortalJobsFS specifically?
     jobsfs = _common.JobsFS.from_raw(jobsfs)
     try:
         return jobsfs.requests.current

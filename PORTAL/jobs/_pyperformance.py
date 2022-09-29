@@ -209,10 +209,8 @@ class Benchmarks:
 
     def _load(self):
         for suite in self.SUITES:
-            try:
-                names = self._cache[suite]
-            except KeyError:
-                names = self._cache[suite] = self._load_suite(suite)
+            if suite not in self._cache:
+                self._cache[suite] = self._load_suite(suite)
         return self._cache
 
 
@@ -847,7 +845,9 @@ class PyperfComparison(_PyperfComparison):
         super().__init__(source, byname)
         baseline = PyperfComparisonBaseline.from_raw(baseline, fail=True)
         if self._byname and sorted(self._byname) != sorted(baseline.byname):
-            raise ValueError(f'mismatch with baseline ({sorted(self._byname)} != {sorted(baseline.byname)})')
+            b1 = sorted(self._byname)
+            b2 = sorted(baseline.byname)
+            raise ValueError(f'mismatch with baseline ({b1} != {b2})')
         if mean:
             mean = _utils.ElapsedTimeComparison.parse(mean, fail=True)
 
@@ -1049,7 +1049,6 @@ class PyperfTable:
                 except StopIteration:
                     continue
                 if not headerdiv.startswith('+='):
-                #if headerdiv != header.div:
                     raise ValueError('bad table text')
                 break
         else:
@@ -1060,7 +1059,7 @@ class PyperfTable:
         for line in lines:
             try:
                 row = row_cls.parse(line, fail=True)
-            except PyperfTableRowUnsupportedLineError as exc:
+            except PyperfTableRowUnsupportedLineError:
                 if not line:
                     # end-of-table
                     break
@@ -1115,7 +1114,7 @@ class PyperfTable:
             lines: Iterator[str],
             required: bool = True
     ) -> Tuple[Optional[List[str]], Optional[str]]:
-        # Ignored benchmarks (2) of benchmark-results/cpython-3.10.4-9d38120e33-fc_linux-42d6dd4409cb.json: genshi_text, genshi_xml
+        # Ignored benchmarks (2) of cpython-3.10.4-9d38120e33-fc_linux-42d6dd4409cb.json: genshi_text, genshi_xml
         prefix = r'Ignored benchmarks \((\d+)\) of \w+.*\w'
         names, line = cls._parse_names_list(line, lines, prefix)
         if not names and required:
@@ -1339,6 +1338,7 @@ class PyperfTableRow(_PyperfTableRowBase):
             raise TypeError('not supported for subclasses')
         if not header:
             raise ValueError('missing header')
+
         class _PyperfTableRow(PyperfTableRow):
             @classmethod
             def parse(  # type: ignore[override]
@@ -1438,6 +1438,7 @@ class PyperfResults:
         self._validate_data(data)
         self._data = data
         self._resfile = PyperfResultsFile.from_raw(resfile)
+        self._modified = False
 
     def _copy(self) -> "PyperfResults":
         cls = type(self)
@@ -1497,15 +1498,20 @@ class PyperfResults:
         try:
             return self._uploadid
         except AttributeError:
-            if self._resfile.uploadid:
-                # XXX Compare with what we get from the metadata?
-                self._uploadid = self._resfile.uploadid
-            else:
-                self._uploadid = PyperfUploadID.from_metadata(
-                    self.metadata,
-                    suite=self.suites,
+            self._uploadid = PyperfUploadID.from_metadata(
+                self.metadata,
+                suite=self.suites,
+            )
+            assert (
+                getattr(self, "_modified", False) or
+                self._resfile.uploadid is None or
+                self._uploadid == self._resfile.uploadid or
+                (
+                    str(self._uploadid._replace(suite=PyperfUploadID.SUITE_NOT_KNOWN)) ==
+                    str(self._resfile.uploadid._replace(suite=PyperfUploadID.SUITE_NOT_KNOWN))
                 )
-        return self._uploadid
+            ), (self._uploadid, self._resfile.uploadid)
+            return self._uploadid
 
     @property
     def suite(self) -> str:
@@ -1568,6 +1574,7 @@ class PyperfResults:
             results = self._copy()
             results._data = data
             results._by_suite = {suite: data['benchmarks'][0]}
+            results._modified = True
             by_suite_resolved[suite] = results
         return by_suite_resolved
 
@@ -1576,18 +1583,22 @@ class PyperfResults:
 
     def copy_to(
             self,
-            filename: str,
+            filename: Union["PyperfResultsFile", str],
             resultsroot: Optional[str] = None,
             *,
             compressed: Optional[bool] = None,
     ) -> "PyperfResults":
         if self._resfile is None:
             raise ValueError
-        if os.path.exists(self._resfile.filename):
-            resfile = self._resfile.copy_to(filename, resultsroot,
+        if isinstance(filename, PyperfResultsFile):
+            filename_str = filename.filename
+        else:
+            filename_str = filename
+        if not self._modified and os.path.exists(self._resfile.filename):
+            resfile = self._resfile.copy_to(filename_str, resultsroot,
                                             compressed=compressed)
         else:
-            resfile = PyperfResultsFile(filename, resultsroot,
+            resfile = PyperfResultsFile(filename_str, resultsroot,
                                         compressed=compressed)
             resfile.write(self)
         copied = self._copy()
@@ -1720,9 +1731,9 @@ class PyperfResultsMetadata:
             else:
                 logger.debug(f'# {field} empty/missing in results metadata{context}; ignoring)')
         elif old != value:
-             logger.warning(f'replacing {field} in results metadata{context} ({old} -> {value})')
-             data[field] = value
-             modified = True
+            logger.warning(f'replacing {field} in results metadata{context} ({old} -> {value})')
+            data[field] = value
+            modified = True
         return old, modified
 
     @classmethod
@@ -1812,10 +1823,10 @@ class PyperfResultsMetadata:
             return parsed
 
     @property
-    def build(self) -> List[str]:
+    def build(self) -> Tuple[str, ...]:
         # XXX Add to PyperfUploadID?
         # XXX Extract from self._data?
-        return ['PGO', 'LTO']
+        return ('PGO', 'LTO')
 
     @property
     def host(self) -> _utils.HostInfo:
@@ -1837,7 +1848,6 @@ class PyperfResultsMetadata:
 
     @property
     def compatid(self) -> str:
-        raw = self.host.as_metadata()
         return PyperfUploadID.build_compatid(
             self.host,
             self._data['performance_version'],
@@ -1908,7 +1918,7 @@ class PyperfResultsInfo(
     def from_values(
             cls,
             uploadid: Any,
-            build: Optional[_utils.ListOrStrType] = None,
+            build: Optional[_utils.SequenceOrStrType] = None,
             filename: Optional[str] = None,
             compared: Optional[_PyperfComparison] = None,
             resultsroot: Optional[str] = None,
@@ -1923,7 +1933,7 @@ class PyperfResultsInfo(
     def _from_values(
             cls,
             uploadid: Any,
-            build: Optional[List[str]],
+            build: Optional[Tuple[str, ...]],
             filename: Optional[str],
             compared: Optional[_PyperfComparison],
             resultsroot: Optional[str],
@@ -1947,18 +1957,18 @@ class PyperfResultsInfo(
     @classmethod
     def _normalize_build(
             cls,
-            build: Optional[_utils.ListOrStrType]
-    ) -> Optional[List[str]]:
+            build: Optional[_utils.SequenceOrStrType]
+    ) -> Optional[Tuple[str, ...]]:
         if not build:
             return None
         if isinstance(build, str):
             # "PGO,LTO"
             build = build.split(',')
         cls._validate_build_values(build)
-        return build
+        return tuple(build)
 
     @classmethod
-    def _validate_build_values(cls, values: List[str]) -> None:
+    def _validate_build_values(cls, values: _utils.SequenceOrStrType) -> None:
         for i, value in enumerate(values):
             if not value:
                 raise ValueError(f'build[{i}] is empty')
@@ -1969,7 +1979,7 @@ class PyperfResultsInfo(
     def __new__(
             cls,
             uploadid: Optional[PyperfUploadID],
-            build: Optional[List[str]] = None,
+            build: Optional[Tuple[str, ...]] = None,
             filename: Optional[str] = None,
             compared: Optional[_PyperfComparison] = None
     ):
@@ -2184,9 +2194,9 @@ class PyperfResultsInfo(
 
 class PyperfResultsIndex:
 
-#    iter_all()
-#    add()
-#    ensure_means()
+    # iter_all()
+    # add()
+    # ensure_means()
 
     def __init__(
             self,
@@ -2586,8 +2596,6 @@ class PyperfResultsFile:
             *(optional),
             '--table',
             self._relfile,
-#            *(_utils.strict_relpath(o.filename, cwd)
-#              for o in others),
             *(o._relfile for o in others),
             cwd=cwd,
         )
@@ -2596,11 +2604,9 @@ class PyperfResultsFile:
             return None
         filenames = [
             self._filename,
-#            *(os.path.join(cwd, o.filename) for o in others),
             *(o.filename for o in others),
         ]
         return PyperfComparisons.parse_table(proc.stdout, filenames)
-#        return PyperfTable.parse(proc.stdout, filenames)
 
 
 class PyperfResultsDir:
@@ -2657,7 +2663,7 @@ class PyperfResultsDir:
             self,
             relfile: str,
             uploadid: PyperfUploadID,
-            build: Optional[_utils.ListOrStrType] = None,
+            build: Optional[_utils.SequenceOrStrType] = None,
             baseline: Optional[str] = None,
             mean: Optional[str] = None,
             *,
@@ -3142,7 +3148,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             index: PyperfResultsIndex,
             filename: str
     ) -> str:
-        table_lines = self._render_markdown(index)
+        table_lines = self._render_markdown(index, filename)
         MARKDOWN_START = '<!-- START results table -->'
         MARKDOWN_END = '<!-- END results table -->'
         filename = self._raw.resolve(filename)
@@ -3169,11 +3175,17 @@ class PyperfResultsRepo(PyperfResultsStorage):
             outfile.write(text)
         return filename
 
-    def _render_markdown(self, index: PyperfResultsIndex) -> Iterator[str]:
+    def _render_markdown(
+        self,
+        index: PyperfResultsIndex,
+        output_filename: str
+    ) -> Iterator[str]:
         def render_row(row):
             row = (f' {v} ' for v in row)
             return f'| {"|".join(row)} |'
         columns = 'date release commit host mean'.split()
+
+        output_dir = os.path.dirname(os.path.join(self._raw.root, output_filename))
 
         rows = index.as_rendered_rows(columns)
         by_suite: Dict[SuiteType, List[List[str]]] = {}
@@ -3182,12 +3194,10 @@ class PyperfResultsRepo(PyperfResultsStorage):
             if suite not in by_suite:
                 by_suite[suite] = []
             date, release, commit, host, mean = row
-            relpath = self._raw.relpath(info.filename)
+            relpath = os.path.relpath(info.filename, output_dir)
             relpath = relpath.replace(r'\/', '/')
             date = f'[{date}]({relpath})'
             if not mean:
-#                assert info.isbaseline, repr(info)
-#                assert not mean, repr(mean)
                 mean = PyperfComparisonValue.BASELINE
             assert '3.10.4' not in release or mean == '(ref)', repr(mean)
             row = [date, release, commit, host, mean]
